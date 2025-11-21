@@ -1,0 +1,126 @@
+mkdir -p ~/gunny-api/cli
+
+cat <<'PY' > ~/gunny-api/cli/gunny
+#!/usr/bin/env python3
+import os
+import sys
+import textwrap
+import requests
+
+API_BASE = os.environ.get("GUNNY_API_BASE", "http://127.0.0.1:3000")
+CLIENT_ID = os.environ.get("GUNNY_CLIENT_ID", "gunny-client")
+CLIENT_SECRET = os.environ.get("GUNNY_CLIENT_SECRET", "")
+
+def error(msg):
+    print(f"[gunny-cli] ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def get_prompt_from_args():
+    if len(sys.argv) > 1:
+        return " ".join(sys.argv[1:])
+    # no args -> read from stdin
+    print("Enter prompt, end with Ctrl+D (Ctrl+Z then Enter on Windows):", file=sys.stderr)
+    return sys.stdin.read().strip()
+
+def get_token():
+    if not CLIENT_SECRET:
+        error("GUNNY_CLIENT_SECRET is not set in the environment")
+
+    token_url = API_BASE.rstrip("/") + "/token"
+    try:
+        resp = requests.post(
+            token_url,
+            data={"grant_type": "client_credentials"},
+            auth=(CLIENT_ID, CLIENT_SECRET),
+            timeout=10,
+        )
+    except Exception as e:
+        error(f"Failed to call token endpoint: {e}")
+
+    if resp.status_code != 200:
+        error(f"Token endpoint returned {resp.status_code}: {resp.text}")
+
+    try:
+        data = resp.json()
+    except Exception:
+        error(f"Token endpoint did not return JSON: {resp.text}")
+
+    token = data.get("access_token")
+    if not token:
+        error(f"No access_token in response: {data}")
+
+    return token
+
+def call_gunny(token, prompt):
+    url = API_BASE.rstrip("/") + "/api/generate"
+    body = {"prompt": prompt}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.post(url, json=body, headers=headers, timeout=60)
+    except Exception as e:
+        error(f"Failed to call /api/generate: {e}")
+
+    if resp.status_code != 200:
+        error(f"/api/generate returned {resp.status_code}: {resp.text}")
+
+    try:
+        data = resp.json()
+    except Exception:
+        error(f"/api/generate did not return JSON: {resp.text}")
+
+    reply = data.get("reply")
+    if not reply:
+        error(f"No 'reply' field in response: {data}")
+
+    return reply
+
+def main():
+    prompt = get_prompt_from_args()
+    if not prompt:
+        error("Empty prompt")
+
+    token = get_token()
+    reply = call_gunny(token, prompt)
+
+    print(reply)
+
+if __name__ == "__main__":
+    main()
+PY
+
+chmod +x ~/gunny-api/cli/gunny
+
+
+## Make Gunny Global
+mkdir -p ~/.local/bin
+ln -sf ~/gunny-api/cli/gunny ~/.local/bin/gunny
+
+# Ensure ~/.local/bin is on PATH
+grep -q 'LOCAL_BIN' ~/.bashrc || cat <<'EOF' >> ~/.bashrc
+
+# Add local bin for gunny CLI
+export PATH="$HOME/.local/bin:$PATH"  # LOCAL_BIN
+EOF
+
+source ~/.bashrc
+
+## Set Variables for CLI
+
+cat <<'EOF' >> ~/.bashrc
+
+# Gunny CLI config
+export GUNNY_API_BASE="http://127.0.0.1:3000"
+export GUNNY_CLIENT_ID="gunny-client"
+export GUNNY_CLIENT_SECRET="SuperSecret123!"
+EOF
+
+source ~/.bashrc
+
+## For external use on other machines
+export GUNNY_API_BASE="https://YOUR_DOMAIN_HERE"
+
+
